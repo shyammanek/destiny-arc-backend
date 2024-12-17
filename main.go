@@ -1,31 +1,30 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"google.golang.org/api/idtoken"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 // User represents the structure of the user data
 type User struct {
-	ID             string `gorm:"primaryKey"`
-	Email          string `gorm:"unique"`
-	Name           string
-	Photo          string
-	DOB            string
-	Hobbies        string
-	MobileNumber   string
-	LocationCity   string
-	Country        string
-	TarotReading   string
-	CardsSelection string
-	PersonName     string
+	ID             string `json:"id" gorm:"primaryKey"` // Matches 'id' column
+	Email          string `json:"email"`
+	Name           string `json:"name"`
+	Photo          string `json:"photo"`
+	DOB            string `json:"dob"`
+	Hobbies        string `json:"hobbies"`
+	MobileNumber   string `json:"mobile_number"`
+	LocationCity   string `json:"location_city"`
+	Country        string `json:"country"`
+	TarotReading   string `json:"tarot_reading"`
+	CardsSelection string `json:"cards_selection"`
+	PersonName     string `json:"person_name"`
 	Coins          int    `json:"coins"`
 	Relationship   string `json:"relationship"`
 	Occupation     string `json:"occupation"`
@@ -33,62 +32,86 @@ type User struct {
 	BirthCity      string `json:"birth_city"`
 	BirthState     string `json:"birth_state"`
 	BirthCountry   string `json:"birth_country"`
+	ReadingDate    string `json:"reading_date"`
 }
 
 var db *gorm.DB
 
-// Initialize the database connection
+// initDB initializes the database connection
 func initDB() {
 	var err error
 	dsn := "postgresql://shyam:zAmST0MYGH3YeFwYrVGNkg@jumbo-auk-6240.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
-
-	// Connect to CockroachDB
 	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to connect to the database: %v", err)
 	}
 
-	// Auto-migrate the User struct to create the table
-	if err := db.AutoMigrate(&User{}); err != nil {
-		log.Fatalf("Failed to migrate the database schema: %v", err)
+	db.AutoMigrate(&User{})
+}
+
+// GoogleAuthMiddleware handles Google OAuth token verification
+type GoogleUser struct {
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	Name          string `json:"name"`
+	Picture       string `json:"picture"`
+	VerifiedEmail bool   `json:"verified_email"`
+}
+
+func GoogleAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		accessToken := c.GetHeader("Authorization")
+		if accessToken == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing Authorization Header"})
+			c.Abort()
+			return
+		}
+
+		// Remove "Bearer " prefix if present
+		accessToken = strings.TrimPrefix(accessToken, "Bearer ")
+
+		// Fetch user info from Google UserInfo endpoint
+		userInfo, err := fetchGoogleUserInfo(accessToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired access token"})
+			c.Abort()
+			return
+		}
+
+		// Set user information in the context
+		c.Set("userID", userInfo.ID)
+		c.Set("email", userInfo.Email)
+		c.Set("name", userInfo.Name)
+		c.Set("photo", userInfo.Picture)
+
+		// Continue with the request
+		c.Next()
 	}
 }
 
-// Middleware to verify Google ID token
-func GoogleAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is missing"})
-			c.Abort()
-			return
-		}
+func fetchGoogleUserInfo(accessToken string) (*GoogleUser, error) {
+	// Call Google's UserInfo endpoint
+	req, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-		// Extract token from "Bearer <token>"
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})
-			c.Abort()
-			return
-		}
-
-		// Verify the token using Google's ID Token verifier
-		ctx := context.Background()
-		payload, err := idtoken.Validate(ctx, token, "YOUR_GOOGLE_CLIENT_ID")
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
-			c.Abort()
-			return
-		}
-
-		// Pass user data into context
-		c.Set("userID", payload.Claims["sub"])
-		c.Set("email", payload.Claims["email"])
-		c.Set("name", payload.Claims["name"])
-		c.Set("photo", payload.Claims["picture"])
-
-		c.Next()
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, err
+	}
+
+	// Parse the response body
+	var user GoogleUser
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, err
+	}
+
+	return &user, nil
 }
 
 func main() {
@@ -97,73 +120,85 @@ func main() {
 	// Initialize the database
 	initDB()
 
+	// Apply the GoogleAuthMiddleware to simulate authentication
+	r.Use(GoogleAuthMiddleware())
+
 	// Protected route to store user data
+	// Apply GoogleAuthMiddleware to protect this route
 	r.POST("/saveProfile", GoogleAuthMiddleware(), func(c *gin.Context) {
-		// Extract user information from context
-		userID, _ := c.Get("userID")
-		email, _ := c.Get("email")
-		name, _ := c.Get("name")
-		photo, _ := c.Get("photo")
+		var user User
 
-		// Bind JSON body to additional fields
-		var additionalData struct {
-			DOB            string `json:"dob"`
-			Hobbies        string `json:"hobbies"`
-			MobileNumber   string `json:"mobile_number"`
-			LocationCity   string `json:"location_city"`
-			Country        string `json:"country"`
-			TarotReading   string `json:"tarot_reading"`
-			CardsSelection string `json:"cards_selection"`
-			PersonName     string `json:"person_name"`
-			Coins          int    `json:"coins"`
-			Relationship   string `json:"relationship"`
-			Occupation     string `json:"occupation"`
-			BirthTime      string `json:"birth_time"`
-			BirthCity      string `json:"birth_city"`
-			BirthState     string `json:"birth_state"`
-			BirthCountry   string `json:"birth_country"`
-		}
-
-		if err := c.ShouldBindJSON(&additionalData); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		// Bind JSON to User struct
+		if err := c.ShouldBindJSON(&user); err != nil {
+			log.Println("Bind Error:", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
 			return
 		}
 
-		// Create a user object
-		user := User{
-			ID:             userID.(string),
-			Email:          email.(string),
-			Name:           name.(string),
-			Photo:          photo.(string),
-			DOB:            additionalData.DOB,
-			Hobbies:        additionalData.Hobbies,
-			MobileNumber:   additionalData.MobileNumber,
-			LocationCity:   additionalData.LocationCity,
-			Country:        additionalData.Country,
-			TarotReading:   additionalData.TarotReading,
-			CardsSelection: additionalData.CardsSelection,
-			PersonName:     additionalData.PersonName,
-			Coins:          additionalData.Coins,
-			Relationship:   additionalData.Relationship,
-			Occupation:     additionalData.Occupation,
-			BirthTime:      additionalData.BirthTime,
-			BirthCity:      additionalData.BirthCity,
-			BirthState:     additionalData.BirthState,
-			BirthCountry:   additionalData.BirthCountry,
-		}
-
-		// Save user to the database
-		if err := db.Create(&user).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save user data"})
+		// Extract email from the verified token
+		tokenEmail, exists := c.Get("email")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "User profile saved successfully!"})
+		// Ensure the email in the body matches the token email
+		if user.Email != tokenEmail {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Email mismatch with token"})
+			return
+		}
+
+		log.Println("Incoming Data:", user)
+
+		// Upsert logic: Update existing row or insert new data
+		if err := db.Model(&User{}).
+			Where("email = ?", user.Email).
+			Assign(User{
+				Name:           user.Name,
+				Photo:          user.Photo,
+				DOB:            user.DOB,
+				Hobbies:        user.Hobbies,
+				MobileNumber:   user.MobileNumber,
+				LocationCity:   user.LocationCity,
+				Country:        user.Country,
+				TarotReading:   user.TarotReading,
+				CardsSelection: user.CardsSelection,
+				PersonName:     user.PersonName,
+				Coins:          user.Coins,
+				Relationship:   user.Relationship,
+				Occupation:     user.Occupation,
+				BirthTime:      user.BirthTime,
+				BirthCity:      user.BirthCity,
+				BirthState:     user.BirthState,
+				BirthCountry:   user.BirthCountry,
+				ReadingDate:    user.ReadingDate,
+			}).
+			FirstOrCreate(&user).Error; err != nil {
+			log.Println("DB Save/Update Error:", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save or update user data"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "User data saved/updated successfully"})
 	})
 
-	// Health check route
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "pong"})
+	// Get user profile from the database based on email
+	r.GET("/getProfile", func(c *gin.Context) {
+		email := c.Query("email") // Get the email from query parameters
+		if email == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Email query parameter is required"})
+			return
+		}
+
+		var user User
+		if err := db.Where("email = ?", email).First(&user).Error; err != nil {
+			log.Println("DB Fetch Error:", err)
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
+
+		log.Println("Fetched User:", user)
+		c.JSON(http.StatusOK, gin.H{"user": user})
 	})
 
 	// Start the server
