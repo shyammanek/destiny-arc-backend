@@ -1,0 +1,16 @@
+{
+    "dob": "1990-05-20",
+    "hobbies": "Reading, Traveling, Music",
+    "mobile_number": "1234567890",
+    "location_city": "San Francisco",
+    "country": "USA",
+    "tarot_reading": "General Reading",
+    "cards_selection": "The Sun, The Moon",
+    "person_name": "John Doe",
+    "reading_date": "2023-12-01",
+    "coins": 10,
+    "relationship": "Single",
+    "occupation": "Software Engineer",
+    "birth_time": "15:30",
+    "birth_city": "Los Angeles"
+}
