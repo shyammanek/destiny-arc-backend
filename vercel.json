@@ -1,0 +1,28 @@
+{
+    "version": 2,
+    "builds": [
+        {
+            "src": "main.go",
+            "use": "@vercel/go"
+        }
+    ],
+    "routes": [
+        {
+            "src": "/saveProfile",
+            "methods": [
+                "POST"
+            ],
+            "dest": "/main.go"
+        },
+        {
+            "src": "/getProfile",
+            "methods": [
+                "GET"
+            ],
+            "dest": "/main.go"
+        }
+    ],
+    "env": {
+        "DATABASE_URL": "postgresql://shyam:zAmST0MYGH3YeFwYrVGNkg@jumbo-auk-6240.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full",
+    }
+}
